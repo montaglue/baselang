@@ -1,0 +1,4 @@
+(fn main () unit
+    (set a 1)
+    (print (plus a 1))
+)

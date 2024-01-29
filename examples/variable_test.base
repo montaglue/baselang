@@ -1,0 +1,12 @@
+(fn set_two (a int) int
+    (set a 2)
+    (print a)
+    (return 0)
+)
+
+(fn main () int 
+    (let a 1)
+    (set_two a)
+    (print a)
+    (return 0)
+)

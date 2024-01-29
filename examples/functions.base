@@ -1,0 +1,10 @@
+(fn my_plus (a int b int) int
+    (print a)
+    (print b)
+    (return (plus a b))
+)
+
+(fn main () int
+    (print (my_plus 1 1))
+    (return 0)
+)

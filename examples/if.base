@@ -1,0 +1,15 @@
+(fn for_alternative (i int n int) int
+    (if (eq i n) | 
+        (return i) 
+    | 
+        (return (plus i (for_alternative (plus i 1) n)))
+    )
+)
+
+(fn main () unit
+    (if (eq (plus 1 2) 2) | 
+        (print 1) 
+    | 
+        (print 2) 
+    )
+)

@@ -1,0 +1,4 @@
+(fn main () unit
+    (print (plus 1 2 3))
+    (print (plus 4 (plus 1 (plus 1 2 3 4 5 6) 3) 6))
+)

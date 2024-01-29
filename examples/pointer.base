@@ -1,0 +1,12 @@
+(fn set_two (a (ptr int)) int
+    (set (deref a) 2)
+    (print (deref a))
+    (return 0)
+)
+
+(fn main () int 
+    (let a _ (new 1))
+    (set_two a)
+    (print (deref a))
+    (return 0)
+)
