@@ -15,6 +15,7 @@ dependencies = [
 name = "baselang"
 version = "0.1.0"
 dependencies = [
+ "either",
  "inkwell",
  "thiserror",
 ]

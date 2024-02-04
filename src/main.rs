@@ -24,14 +24,14 @@ fn process_error<T>(error: impl Into<CompilerResult<T>>, prompt: &str) -> T {
 }
 
 fn main() {
-    let program = include_str!("../examples/pointer.base");
+    let program = include_str!("../examples/structure.base");
 
     let mut errors = Errors::new();
 
     let mut parser = Parser::new(program);
 
     let mut ast = process_error(parser.parse(&mut errors), "Error during parsing");
-    // println!("{:#?}", ast);
+    println!("{:#?}", ast);
 
     process_error(
         resolve::resolve(&mut ast, &mut errors),

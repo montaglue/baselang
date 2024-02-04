@@ -1,0 +1,15 @@
+(struct Pair x int y int)
+(struct String pointer (ptr char) len int capacity int)
+
+(fn make_pair (x int y int) Pair (return (Pair x y)))
+
+
+(fn make_string (len int literal (ptr char)) String 
+    (return (String literal len len))
+)
+
+(fn main () int 
+    (let a _ (make_string 2 "hi"))
+    (print (field a len))
+    (return 0)
+)

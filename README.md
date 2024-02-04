@@ -10,8 +10,13 @@ This project aims to create base for my next programming language experiments
 - [x] types: float, bool, string
 - [x] errors reports
 - [x] add pointers
-- [ ] add structs (new types, fields)
+- [x] add structs
+- [x] add string
+- [x] add field access to structs
+- [ ] add arrays
 - [ ] add enums
+- [ ] add match construction
+- [ ] syntaxis update
 - [ ] make cli
 - [ ] developer experiece improvement
 - [ ] resolve stage (with symbol table)

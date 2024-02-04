@@ -10,3 +10,4 @@ inkwell = { git = "https://github.com/TheDan64/inkwell", branch = "master", feat
     "llvm16-0",
 ] }
 thiserror = "1.0.56"
+either = "1.9.0"

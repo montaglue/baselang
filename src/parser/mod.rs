@@ -4,7 +4,7 @@ use std::{
 };
 
 use crate::{
-    ast::{Args, Ast, AstFunction, AstType, Expr, ExprKind},
+    ast::{Args, Ast, AstFunction, AstType, Expr, ExprKind, Field, Struct},
     parser::tokenizer::TokenType,
     utils::error::{error, CompilerResult, ErrorKind, Errors},
 };
@@ -57,6 +57,12 @@ where
             TokenType::Float(f) => Expr::new(ExprKind::Float(f), ast.add_type(AstType::Float)),
             TokenType::Ident => {
                 let ident = self.source[token.span.range()].to_owned();
+                if ident.starts_with('"') && ident.ends_with('"') {
+                    return Ok(Expr::new(
+                        ExprKind::String(ident),
+                        ast.add_type(AstType::Struct("String".to_owned())),
+                    ));
+                }
                 Expr::new(ExprKind::Ident(ident), ast.new_type())
             }
             TokenType::OpenParen => {
@@ -208,6 +214,21 @@ where
                         };
                         Expr::new(ExprKind::Deref(ast.add_expr(value)), ast.new_type())
                     }
+                    "field" => {
+                        let Some(Expr {
+                            kind: ExprKind::Ident(field),
+                            typ: _,
+                        }) = exprs[0].pop()
+                        else {
+                            unreachable!()
+                        };
+                        let Some(expr) = exprs[0].pop() else {
+                            unreachable!()
+                        };
+
+                        let expr = ast.add_expr(expr);
+                        Expr::new(ExprKind::FieldAccess(expr, field), ast.new_type())
+                    }
                     _ => Expr::new(
                         ExprKind::Call(name, ast.add_exprs(exprs.pop().unwrap())),
                         ast.new_type(),
@@ -231,20 +252,20 @@ where
                     "bool" => Ok(AstType::Bool),
                     "float" => Ok(AstType::Float),
                     "int" => Ok(AstType::Int),
-                    "string" => Ok(AstType::String),
                     "unit" => Ok(AstType::Unit),
+                    "char" => Ok(AstType::Char),
                     "_" => {
                         let hole_id = ast.new_type();
-                        Ok(ast[hole_id])
+                        Ok(ast[hole_id].clone())
                     }
-                    s => error(ErrorKind::UnexpectedType(s.to_owned())),
+                    s => Ok(AstType::Struct(s.to_owned())), // TOOD: make name validation
                 }
             }
             TokenType::OpenParen => {
                 // skip ptr
                 expect_token(self.tokenizer.next(), Some(TokenType::Ident), errors)?;
                 let typ = self.parse_type(ast, errors)?;
-                ast.add_type(typ);
+                ast.add_type(typ.clone());
                 expect_token(self.tokenizer.next(), Some(TokenType::CloseParen), errors)?;
                 Ok(AstType::Pointer(ast.add_type(typ)))
             }
@@ -284,9 +305,6 @@ where
     }
 
     fn parse_fn(&mut self, ast: &mut Ast, errors: &mut Errors) -> CompilerResult<AstFunction> {
-        expect_token(self.tokenizer.next(), Some(TokenType::OpenParen), errors)?; // skip (
-        expect_token(self.tokenizer.next(), Some(TokenType::Ident), errors)?; // skip fn TODO: check exactly
-
         let name_token = expect_token(self.tokenizer.next(), Some(TokenType::Ident), errors)?;
         let name = self.source[name_token.span.range()].to_owned();
         // TODO: check is name valid
@@ -312,6 +330,38 @@ where
 
         Ok(AstFunction::new(name, args, ret_type, body))
     }
+
+    fn parse_struct(&mut self, ast: &mut Ast, errors: &mut Errors) -> CompilerResult<Struct> {
+        let name_token = expect_token(self.tokenizer.next(), Some(TokenType::Ident), errors)?;
+        let name = self.source[name_token.span.range()].to_owned();
+
+        let mut fields = Vec::new();
+
+        while self
+            .tokenizer
+            .peek()
+            .is_some_and(|token| token.kind != TokenType::CloseParen)
+        {
+            let field_name_token =
+                expect_token(self.tokenizer.next(), Some(TokenType::Ident), errors)?;
+
+            let field_name = self.source[field_name_token.span.range()].to_owned();
+
+            let field_type = self.parse_type(ast, errors)?;
+            let field_type = ast.add_type(field_type);
+
+            let field = Field {
+                name: field_name,
+                typ: field_type,
+            };
+
+            fields.push(field);
+        }
+
+        expect_token(self.tokenizer.next(), Some(TokenType::CloseParen), errors)?; // skip )
+
+        Ok(Struct { name, fields })
+    }
 }
 
 impl<'s, T> Parser<'s, T>
@@ -321,8 +371,24 @@ where
     pub fn parse(&mut self, errors: &mut Errors) -> CompilerResult<Ast> {
         let mut ast = Ast::new();
         while self.tokenizer.peek().is_some() {
-            let func = self.parse_fn(&mut ast, errors)?;
-            ast.add_function(func);
+            expect_token(self.tokenizer.next(), Some(TokenType::OpenParen), errors)?;
+            let token = expect_token(self.tokenizer.next(), Some(TokenType::Ident), errors)?;
+
+            let token = &self.source[token.span.range()];
+
+            match token {
+                "fn" => {
+                    let func = self.parse_fn(&mut ast, errors)?;
+                    ast.add_function(func);
+                }
+                "struct" => {
+                    let strct = self.parse_struct(&mut ast, errors)?;
+                    ast.add_struct(strct);
+                }
+                _ => {
+                    return error(ErrorKind::UnexpectedToken(token.to_owned()));
+                }
+            }
         }
         Ok(ast)
     }
@@ -334,6 +400,11 @@ mod tests {
 
     #[test]
     fn one_plus_one() {
+        let parser = super::Parser::new(include_str!("../../examples/one_plus_one.base"));
+        println!("{:?}", parser.source.len());
+        for token in parser.tokenizer {
+            println!("{:?}", token);
+        }
         let mut parser = super::Parser::new(include_str!("../../examples/one_plus_one.base"));
         let mut errors = Errors::new();
         let ast = parser.parse(&mut errors).unwrap();

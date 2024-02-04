@@ -1,5 +1,5 @@
 use crate::{
-    ast::{Ast, AstFunctionId, AstType, ExprId, ExprKind},
+    ast::{Ast, AstFunctionId, AstType, ExprId, ExprKind, TypeDef},
     ir::{builder::Builder, Constant},
     utils::error::{error, CompilerResult, ErrorKind, Errors},
 };
@@ -8,6 +8,10 @@ use super::{IrType, Module, OptionalValue, Value};
 
 pub fn build_ir(ast: &Ast, errors: &mut Errors) -> CompilerResult<Module> {
     let mut builder = Builder::new();
+
+    for (name, TypeDef::Struct(strct)) in &ast.type_defs {
+        builder.build_struct(ast, strct.clone());
+    }
 
     for i in 0..ast.functions.len() {
         generate_function(AstFunctionId(i), ast, &mut builder, errors)?;
@@ -45,7 +49,7 @@ fn generate_ref(
 ) -> CompilerResult<Value> {
     let typ = ast.get_type(expr_id);
 
-    if typ.to_ir() == IrType::Pointer {
+    if typ.to_ir(builder) == IrType::Pointer {
         let value = generate_expr(expr_id, ast, builder, errors)?.unwrap()?;
         return Ok(value);
     }
@@ -76,16 +80,16 @@ fn generate_expr(
             for expr_id in *exprs {
                 if let (Some(lhs), Some(typ)) = (result, &result_type) {
                     let rhs = generate_expr(expr_id, ast, builder, errors)?.unwrap()?;
-                    result = Some(builder.build_add(lhs, rhs, None, typ.to_ir()));
+                    result = Some(builder.build_add(lhs, rhs, None, typ.to_ir(builder)));
                 } else {
                     result = Some(generate_expr(expr_id, ast, builder, errors)?.unwrap()?);
-                    result_type = Some(ast[expr.typ]);
+                    result_type = Some(ast[expr.typ].clone());
                 }
             }
             result
         }
         ExprKind::Eq(lhs, rhs) => {
-            let typ = ast.get_type(*lhs).to_ir();
+            let typ = ast.get_type(*lhs).to_ir(builder);
             let lhs = generate_expr(*lhs, ast, builder, errors)?.unwrap()?;
             let rhs = generate_expr(*rhs, ast, builder, errors)?.unwrap()?;
             Some(builder.build_eq(lhs, rhs, None, typ))
@@ -93,19 +97,19 @@ fn generate_expr(
         ExprKind::Set(lhs, rhs) => {
             let ptr = generate_ref(*lhs, ast, builder, errors)?;
             let value = generate_expr(*rhs, ast, builder, errors)?.unwrap()?;
-            let typ = ast.get_type(*rhs).to_ir();
+            let typ = ast.get_type(*rhs).to_ir(builder);
             builder.build_store(value, typ, Some(ptr));
             None
         }
         ExprKind::Print(expr) => {
             let value = generate_expr(*expr, ast, builder, errors)?.unwrap()?;
-            let typ = ast.get_type(*expr).to_ir();
+            let typ = ast.get_type(*expr).to_ir(builder);
             builder.build_print(value, typ);
             None
         }
         ExprKind::Integer(i) => Some(Value::Constant(Constant::Int(*i))),
         ExprKind::Ident(ident) => {
-            let typ = ast.get_type(expr_id).to_ir();
+            let typ = ast.get_type(expr_id).to_ir(builder);
             let ptr = builder.build_load(Value::Named(ident.clone()), typ, None);
             Some(ptr)
         }
@@ -113,7 +117,12 @@ fn generate_expr(
             let args = args
                 .map(|expr_id| Ok(generate_expr(expr_id, ast, builder, errors)?.unwrap()?))
                 .collect::<CompilerResult<Vec<_>>>()?;
-            Some(builder.build_call(fun_name.clone(), args, None))
+            if ast.type_defs.contains_key(fun_name) {
+                let struct_id = builder.get_struct(&fun_name).unwrap();
+                Some(builder.build_struct_construct(struct_id, args, None))
+            } else {
+                Some(builder.build_call(fun_name.clone(), args, None))
+            }
         }
         ExprKind::Return(expr) => {
             let value = generate_expr(*expr, ast, builder, errors)?.unwrap()?;
@@ -178,10 +187,14 @@ fn generate_expr(
             let value = Value::Constant(Constant::Bool(*b));
             Some(value)
         }
-        ExprKind::String(_) => todo!(),
+        ExprKind::String(s) => {
+            let value = Value::Constant(Constant::String(s.clone()));
+
+            Some(value)
+        }
         ExprKind::New(expr) => {
             let value = generate_expr(*expr, ast, builder, errors)?.unwrap()?;
-            let typ = ast.get_type(*expr).to_ir();
+            let typ = ast.get_type(*expr).to_ir(builder);
             let alloc =
                 builder.build_heap_alloc(typ, Value::Constant(Constant::Int(typ.size())), None);
             Some(builder.build_store(value, typ, Some(alloc)))
@@ -192,16 +205,21 @@ fn generate_expr(
         }
         ExprKind::Deref(ptr) => {
             let ptr_value = generate_expr(*ptr, ast, builder, errors)?.unwrap()?;
-            let typ = ast.get_type(*ptr).to_ir();
+            let typ = ast.get_type(*ptr).to_ir(builder);
             Some(builder.build_load(ptr_value, typ, None))
         }
         ExprKind::Let(name, typ, expr) => {
             let value = generate_expr(*expr, ast, builder, errors)?.unwrap()?;
-            let typ = ast.get_type(*expr).to_ir();
+            let typ = ast.get_type(*expr).to_ir(builder);
             builder.build_stack_alloc(typ, Some(Value::Named(name.clone())));
 
             builder.build_store(value, typ, Some(Value::Named(name.clone())));
             None
+        }
+        ExprKind::FieldAccess(expr, field) => {
+            let value = generate_expr(*expr, ast, builder, errors)?.unwrap()?;
+
+            todo!()
         }
     };
     Ok(OptionalValue(result))

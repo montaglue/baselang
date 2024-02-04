@@ -77,6 +77,8 @@ pub enum ErrorKind {
     NoSuchVariable(String),
     #[error("No such function: {0}")]
     NoSuchFunction(String),
+    #[error("No such function or struct: {0}")]
+    NoSuchFunctionOrStruct(String),
     #[error("Mismatched types: expected {expected:?}, got {got:?}")]
     MismatchedTypes { expected: AstType, got: AstType },
     #[error("Expected value, but got None")]
@@ -87,6 +89,10 @@ pub enum ErrorKind {
     InvariantBroken(String),
     #[error("Cannot make reference from {0:?}")]
     CantMakeReferenceFrom(Expr),
+    #[error("Unexpected token: {0}")]
+    UnexpectedToken(String),
+    #[error("No such field: {0}")]
+    NoSuchField(String),
     #[error("This is default error")]
     #[default]
     Default,

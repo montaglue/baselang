@@ -17,7 +17,14 @@ pub mod builder;
 pub mod irgen;
 
 #[derive(Clone, Debug)]
+pub struct IrStruct {
+    pub name: String,
+    pub fields: Vec<IrType>,
+}
+
+#[derive(Clone, Debug)]
 pub struct Module {
+    pub structs: Vec<IrStruct>,
     pub functions: Vec<IrFunction>,
 }
 
@@ -117,8 +124,19 @@ pub enum Instruction {
         cond: Option<(Value, BlockId)>,
         block: BlockId,
     },
+    Create {
+        struct_id: IrStructId,
+        args: Vec<Value>,
+        result: Value,
+    },
     Return {
         value: Value,
+    },
+    Field {
+        struct_id: IrStructId,
+        field: usize,
+        value: Value,
+        result: Value,
     },
 }
 
@@ -176,11 +194,16 @@ impl IndexMut<BlockId> for IrFunction {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct IrStructId(pub usize);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum IrType {
     Int,
     Float,
     Bool,
     Pointer,
+    Byte,
+    IrStruct(IrStructId),
     Unit,
     Never,
 }
@@ -194,6 +217,8 @@ impl IrType {
             IrType::Float => "float".to_string(),
             IrType::Bool => "bool".to_string(),
             IrType::Pointer => "pointer".to_string(),
+            IrType::IrStruct(_) => todo!(),
+            IrType::Byte => "byte".to_string(),
         }
     }
 
@@ -205,6 +230,8 @@ impl IrType {
             IrType::Pointer => 8,
             IrType::Unit => 0,
             IrType::Never => unreachable!(),
+            IrType::IrStruct(_) => todo!(),
+            IrType::Byte => 1,
         }
     }
 
@@ -218,8 +245,11 @@ impl IrType {
                 .i64_type()
                 .ptr_type(AddressSpace::default())
                 .as_basic_type_enum(),
+
+            IrType::IrStruct(id) => backend.structs[id.0].as_basic_type_enum(),
             IrType::Unit => unreachable!(),
             IrType::Never => unreachable!(),
+            IrType::Byte => backend.context.i8_type().as_basic_type_enum(),
         }
     }
 }

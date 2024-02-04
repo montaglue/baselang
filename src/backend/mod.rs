@@ -4,13 +4,13 @@ use inkwell::{
     basic_block::BasicBlock,
     context::Context,
     module::{Linkage, Module},
-    types::BasicType,
+    types::{BasicType, StructType},
     values::{BasicValue, BasicValueEnum, FunctionValue, GlobalValue, PointerValue},
     AddressSpace,
 };
 
 use crate::{
-    ir::{self, BlockId, Constant, IrFunctionId, IrType, Value},
+    ir::{self, BlockId, Constant, IrFunctionId, IrStructId, IrType, Value},
     utils::error::{error, CompilerError, CompilerResult, ErrorKind, Errors},
 };
 
@@ -19,6 +19,7 @@ pub struct LLVMBackend<'ctx> {
     pub module: inkwell::module::Module<'ctx>,
     pub builder: inkwell::builder::Builder<'ctx>,
     pub block_map: HashMap<(IrFunctionId, BlockId), BasicBlock<'ctx>>,
+    pub structs: Vec<StructType<'ctx>>,
 }
 
 impl<'ctx> LLVMBackend<'ctx> {
@@ -28,6 +29,7 @@ impl<'ctx> LLVMBackend<'ctx> {
             module: context.create_module("main"),
             builder: context.create_builder(),
             block_map: HashMap::new(),
+            structs: Vec::new(),
         }
     }
 }
@@ -148,8 +150,25 @@ fn normalize<'ctx>(
             .const_int(*b as u64, false)
             .into(),
         Value::Constant(Constant::Float(f)) => backend.context.f64_type().const_float(*f).into(),
-        Value::Constant(Constant::String(_s)) => {
-            todo!()
+        Value::Constant(Constant::String(s)) => {
+            let llvm_i8 = backend.context.i8_type();
+            let llvm_i8_ptr = llvm_i8.ptr_type(Default::default());
+            let llvm_i8_array = llvm_i8.array_type(s.len() as u32);
+            let alloca = backend
+                .builder
+                .build_alloca(llvm_i8_array, "alloca")
+                .unwrap();
+
+            let literal = backend
+                .context
+                .const_string(&s.bytes().collect::<Vec<_>>(), true);
+            backend.builder.build_store(alloca, literal).unwrap();
+
+            let result = backend
+                .builder
+                .build_bitcast(alloca, llvm_i8_ptr, "cast")
+                .unwrap();
+            result
         }
     })
 }
@@ -166,11 +185,12 @@ fn build_function_header<'ctx>(
         .iter()
         .map(|arg| arg.1.to_llvm(backend).into())
         .collect::<Vec<_>>();
-    let fun_value = backend.module.add_function(
-        &ir_fun.name,
-        backend.context.i64_type().fn_type(&param_types, false),
-        None,
-    );
+
+    let ret_type = ir_fun.ret.to_llvm(backend);
+    let fun_value =
+        backend
+            .module
+            .add_function(&ir_fun.name, ret_type.fn_type(&param_types, false), None);
 
     for (i, _) in ir_fun.body.iter().enumerate() {
         let basic_block = backend
@@ -326,6 +346,7 @@ fn build_function<'ctx>(
                             .build_alloca(value_type.to_llvm(backend), &name.to_string())
                             .map_err(CompilerError::from_llvm_builder)?
                             .as_basic_value_enum();
+
                         variables.insert(name.to_owned(), ptr);
                         ptr
                     };
@@ -370,10 +391,7 @@ fn build_function<'ctx>(
                         .left()
                         .unwrap(); // TODO: handle unit return type
 
-                    let Value::Generated(result) = result else {
-                        panic!("Unable to store to unamed value");
-                    };
-                    variables.insert(result.to_string(), call_result);
+                    variables.insert(result.to_string().unwrap(), call_result);
                 }
                 ir::Instruction::Return { value } => {
                     let value = normalize(&value, &variables, &backend)?;
@@ -432,11 +450,84 @@ fn build_function<'ctx>(
                         .as_basic_value_enum();
                     variables.insert(name, ptr);
                 }
+                ir::Instruction::Create {
+                    struct_id,
+                    args,
+                    result,
+                } => {
+                    //build stack aloca
+                    let struct_info = &ir.structs[struct_id.0];
+                    let args_undef: Vec<_> = struct_info
+                        .fields
+                        .iter()
+                        .map(|f| f.to_llvm(backend).const_zero())
+                        .collect();
+                    let mut value = backend.context.const_struct(&args_undef, false);
+
+                    // backend.builder.build_insert_value(agg, value, index, name)
+                    // let args: CompilerResult<Vec<_>> = args
+                    //     .iter()
+                    //     .map(|value| normalize(value, &variables, backend))
+                    //     .collect();
+
+                    fn update_name(i: usize, n: usize, name: &str) -> String {
+                        if i + 1 == n {
+                            name.to_string()
+                        } else {
+                            format!("{}{}", name, i)
+                        }
+                    }
+
+                    for (i, arg) in args.iter().enumerate() {
+                        let arg = normalize(arg, &variables, backend)?;
+                        value = backend
+                            .builder
+                            .build_insert_value(
+                                value,
+                                arg,
+                                i as u32,
+                                &update_name(i, args.len(), "insert"),
+                            )
+                            .map_err(CompilerError::from_llvm_builder)?
+                            .into_struct_value();
+                    }
+                    variables.insert(result.to_string().unwrap(), value.as_basic_value_enum());
+                }
+                ir::Instruction::Field {
+                    struct_id,
+                    field,
+                    value,
+                    result,
+                } => {
+                    let value = normalize(value, &variables, backend)?;
+                    let value = backend
+                        .builder
+                        .build_extract_value(
+                            value.into_struct_value(),
+                            *field as u32,
+                            &result.to_string().unwrap(),
+                        )
+                        .map_err(CompilerError::from_llvm_builder)?;
+
+                    variables.insert(result.to_string().unwrap(), value);
+                }
             }
         }
     }
 
     Ok(())
+}
+
+pub fn build_struct(struct_id: IrStructId, ir: &ir::Module, backend: &mut LLVMBackend) {
+    let ir_struct = &ir.structs[struct_id.0];
+
+    let mut fields = Vec::new();
+    for field in &ir_struct.fields {
+        fields.push(field.to_llvm(backend));
+    }
+
+    let struct_type = backend.context.struct_type(&fields, false);
+    backend.structs.push(struct_type);
 }
 
 pub fn build<'ctx>(
@@ -445,6 +536,10 @@ pub fn build<'ctx>(
     errors: &mut Errors,
 ) -> CompilerResult<Module<'ctx>> {
     let mut backend = LLVMBackend::new(context);
+
+    for struct_id in 0..ir.structs.len() {
+        build_struct(IrStructId(struct_id), &ir, &mut backend);
+    }
 
     for fun_id in 0..ir.functions.len() {
         build_function_header(IrFunctionId(fun_id), &ir, &mut backend);

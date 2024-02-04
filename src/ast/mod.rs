@@ -1,12 +1,19 @@
-use std::ops::{Index, IndexMut};
+use std::{
+    collections::HashMap,
+    ops::{Index, IndexMut},
+};
 
-use crate::{ir::IrType, utils::coutner::Countable};
+use crate::{
+    ir::{builder::Builder, IrType},
+    utils::coutner::Countable,
+};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Ast {
     pub functions: Vec<AstFunction>,
     pub exprs: Vec<Expr>,
     pub types: Vec<AstType>,
+    pub type_defs: HashMap<String, TypeDef>,
 }
 
 impl Ast {
@@ -14,13 +21,18 @@ impl Ast {
         Self {
             functions: Vec::new(),
             exprs: Vec::new(),
-            types: Vec::new(),
+            types: vec![AstType::Char, AstType::Pointer(AstTypeId(0))],
+            type_defs: HashMap::new(),
         }
     }
 
-    pub fn get_type(&self, expr_id: ExprId) -> AstType {
+    pub fn string_type(&self) -> AstType {
+        AstType::Pointer(AstTypeId(0))
+    }
+
+    pub fn get_type(&self, expr_id: ExprId) -> &AstType {
         let type_id = self[expr_id].typ;
-        self[type_id]
+        &self[type_id]
     }
 
     pub fn add_expr(&mut self, expr: Expr) -> ExprId {
@@ -60,23 +72,40 @@ impl Ast {
         id
     }
 
-    pub fn t_eq(&self, lhs: AstType, rhs: AstType) -> bool {
+    pub fn add_struct(&mut self, strct: Struct) {
+        self.type_defs
+            .insert(strct.name.clone(), TypeDef::Struct(strct));
+    }
+
+    pub fn t_eq(&self, lhs: &AstType, rhs: &AstType) -> bool {
         match (lhs, rhs) {
             (AstType::Hole(_), _) => true,
             (_, AstType::Hole(_)) => true,
-            (AstType::Unit, AstType::Unit) => true,
+            (&AstType::Unit, &AstType::Unit) => true,
             (AstType::Never, AstType::Never) => true,
             (AstType::Int, AstType::Int) => true,
             (AstType::Float, AstType::Float) => true,
             (AstType::Bool, AstType::Bool) => true,
-            (AstType::String, AstType::String) => true,
-            (AstType::Pointer(lhs), AstType::Pointer(rhs)) => self.t_eq(self[lhs], self[rhs]),
+            (AstType::Char, AstType::Char) => true,
+            (AstType::Pointer(lhs), AstType::Pointer(rhs)) => self.t_eq(&self[*lhs], &self[*rhs]),
             (AstType::Function(lhs_args, lhs_ret), AstType::Function(rhs_args, rhs_ret)) => {
-                self.t_eq(self[lhs_ret], self[rhs_ret])
+                self.t_eq(&self[*lhs_ret], &self[*rhs_ret])
                     && lhs_args
-                        .zip(rhs_args)
-                        .all(|(lhs, rhs)| self.t_eq(self[lhs], self[rhs]))
+                        .zip(*rhs_args)
+                        .all(|(lhs, rhs)| self.t_eq(&self[lhs], &self[rhs]))
             }
+            (AstType::Struct(lhs), AstType::Struct(rhs)) => lhs == rhs,
+            _ => false,
+        }
+    }
+
+    pub fn t_convet(&self, from: &AstType, to: &AstType) -> bool {
+        if self.t_eq(from, to) {
+            return true;
+        }
+        match (from, to) {
+            (AstType::Never, _) => true,
+            (_, AstType::Unit) => true,
             _ => false,
         }
     }
@@ -184,6 +213,7 @@ pub enum ExprKind {
     New(ExprId),
     Ref(ExprId),
     Deref(ExprId),
+    FieldAccess(ExprId, String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -233,15 +263,19 @@ impl Iterator for AstTypes {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct NameId(pub usize);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum AstType {
     Unit,
     Never,
     Int,
     Float,
     Bool,
-    String,
+    Char,
     Pointer(AstTypeId),
     Function(AstTypes, AstTypeId),
+    Struct(String),
     Hole(usize),
 }
 
@@ -253,26 +287,28 @@ impl AstType {
             AstType::Int => "int".to_string(),
             AstType::Float => "float".to_string(),
             AstType::Bool => "bool".to_string(),
-            AstType::String => "string".to_string(),
             AstType::Function(_, _) => {
                 unreachable!()
             }
             AstType::Hole(_) => "_".to_string(),
             AstType::Pointer(_) => unreachable!(),
+            AstType::Struct(_) => todo!(),
+            AstType::Char => "char".to_string(),
         }
     }
 
-    pub fn to_ir(&self) -> IrType {
+    pub fn to_ir(&self, builder: &Builder) -> IrType {
         match self {
             AstType::Unit => IrType::Unit,
             AstType::Never => IrType::Never,
             AstType::Int => IrType::Int,
             AstType::Float => IrType::Float,
             AstType::Bool => IrType::Bool,
-            AstType::String => IrType::Pointer,
+            AstType::Char => IrType::Byte,
             AstType::Function(_, _) => todo!(),
             AstType::Hole(_) => unreachable!(),
             AstType::Pointer(_) => IrType::Pointer,
+            AstType::Struct(s) => IrType::IrStruct(builder.get_struct(s).unwrap()),
         }
     }
 }
@@ -285,3 +321,20 @@ impl Countable for AstType {
 
 pub struct VariableId(pub usize);
 pub struct FunctionId(pub usize);
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Field {
+    pub name: String,
+    pub typ: AstTypeId,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Struct {
+    pub name: String,
+    pub fields: Vec<Field>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum TypeDef {
+    Struct(Struct),
+}
