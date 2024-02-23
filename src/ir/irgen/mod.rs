@@ -1,3 +1,5 @@
+pub mod lower_enum;
+
 use crate::{
     ast::{Ast, AstFunctionId, AstType, ExprId, ExprKind, TypeDef},
     ir::{builder::Builder, Constant},
@@ -6,11 +8,30 @@ use crate::{
 
 use super::{IrType, Module, OptionalValue, Value};
 
-pub fn build_ir(ast: &Ast, errors: &mut Errors) -> CompilerResult<Module> {
+pub fn generate_ir(ast: &Ast, errors: &mut Errors) -> CompilerResult<Module> {
+    println!("module generation begin");
+    let mut module = build_ir(ast, errors)?;
+
+    println!("module lowering begin");
+
+    lower_enum::lower_ir(&mut module, errors)?;
+
+    Ok(module)
+}
+
+fn build_ir(ast: &Ast, errors: &mut Errors) -> CompilerResult<Module> {
     let mut builder = Builder::new();
 
-    for (name, TypeDef::Struct(strct)) in &ast.type_defs {
-        builder.build_struct(ast, strct.clone());
+    for (name, type_def) in &ast.type_defs {
+        println!("generated type {}", name);
+        match type_def {
+            TypeDef::Struct(strct) => {
+                builder.build_struct(ast, strct.clone());
+            }
+            TypeDef::Enum(enm) => {
+                builder.build_enum(ast, enm.clone());
+            }
+        }
     }
 
     for i in 0..ast.functions.len() {
@@ -117,12 +138,7 @@ fn generate_expr(
             let args = args
                 .map(|expr_id| Ok(generate_expr(expr_id, ast, builder, errors)?.unwrap()?))
                 .collect::<CompilerResult<Vec<_>>>()?;
-            if ast.type_defs.contains_key(fun_name) {
-                let struct_id = builder.get_struct(&fun_name).unwrap();
-                Some(builder.build_struct_construct(struct_id, args, None))
-            } else {
-                Some(builder.build_call(fun_name.clone(), args, None))
-            }
+            Some(builder.build_call(fun_name.clone(), args, None))
         }
         ExprKind::Return(expr) => {
             let value = generate_expr(*expr, ast, builder, errors)?.unwrap()?;
@@ -218,8 +234,37 @@ fn generate_expr(
         }
         ExprKind::FieldAccess(expr, field) => {
             let value = generate_expr(*expr, ast, builder, errors)?.unwrap()?;
+            let AstType::Struct(ast_struct) = ast.get_type(*expr) else {
+                unreachable!()
+            };
+            let TypeDef::Struct(struct_info) = &ast.type_defs[ast_struct] else {
+                unreachable!()
+            };
+            let field_id = struct_info
+                .fields
+                .iter()
+                .position(|f| &f.name == field)
+                .unwrap();
+            let struct_id = builder.get_struct(ast_struct).unwrap();
 
-            todo!()
+            let value = builder.build_field_access(value, field_id, struct_id, None);
+
+            Some(value)
+        }
+        ExprKind::StructConstructor(fun_name, args) => {
+            let args = args
+                .map(|expr_id| Ok(generate_expr(expr_id, ast, builder, errors)?.unwrap()?))
+                .collect::<CompilerResult<Vec<_>>>()?;
+
+            let struct_id = builder.get_struct(&fun_name).unwrap();
+            Some(builder.build_struct_construct(struct_id, args, None))
+        }
+        ExprKind::EnumConstructor(constructor, enm, arg) => {
+            let value = generate_expr(*arg, ast, builder, errors)?.unwrap()?;
+            let enum_id = builder.get_enum(enm).unwrap();
+            let variant_id = builder.get_variant(enum_id, constructor).unwrap();
+            let result = builder.build_enum_variant(enum_id, variant_id, value, None);
+            Some(result)
         }
     };
     Ok(OptionalValue(result))

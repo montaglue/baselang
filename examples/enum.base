@@ -1,0 +1,12 @@
+(enum BasicEnum pair Pair string String)
+
+(struct Pair x int y int)
+(struct String pointer (ptr char) len int capacity int)
+
+
+
+
+(fn main () int 
+    (let a _ (pair (Pair 1 1)))
+    (return 0)
+)

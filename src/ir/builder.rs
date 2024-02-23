@@ -1,13 +1,13 @@
 use std::collections::HashMap;
 
 use crate::{
-    ast::{Ast, AstFunction, Struct},
+    ast::{Ast, AstFunction, Enum, Struct},
     utils::coutner::Counter,
 };
 
 use super::{
-    Block, BlockId, Constant, Instruction, IrFunction, IrFunctionId, IrStruct, IrStructId, IrType,
-    Module, Value,
+    Block, BlockId, Constant, Instruction, IrEnum, IrEnumId, IrFunction, IrFunctionId, IrStruct,
+    IrStructId, IrType, Module, Value, VariantId,
 };
 
 pub struct Builder {
@@ -15,11 +15,13 @@ pub struct Builder {
     current_block: Option<BlockId>,
     current_blocks: HashMap<IrFunctionId, BlockId>,
     functions: HashMap<String, IrFunctionId>,
-    module: Module,
+    pub module: Module,
     value_counter: Counter<Value>,
     function_counter: Counter<IrFunctionId>,
     block_counters: HashMap<IrFunctionId, Counter<BlockId>>,
     struct_ids: HashMap<String, IrStructId>,
+    enum_ids: HashMap<String, IrEnumId>,
+    variants: HashMap<(IrEnumId, String), VariantId>,
 }
 
 impl Builder {
@@ -28,6 +30,7 @@ impl Builder {
             module: Module {
                 structs: Vec::new(),
                 functions: Vec::new(),
+                enums: Vec::new(),
             },
             value_counter: Counter::new(),
             function_counter: Counter::new(),
@@ -37,30 +40,102 @@ impl Builder {
             current_blocks: HashMap::new(),
             block_counters: HashMap::new(),
             struct_ids: HashMap::new(),
+            enum_ids: HashMap::new(),
+            variants: HashMap::new(),
         }
     }
 
-    pub fn build_struct(&mut self, ast: &Ast, strct: Struct) {
-        // TODO: allow struct be in any order
+    pub fn build_enum(&mut self, ast: &Ast, enm: Enum) -> IrEnumId {
+        // for
+        // let variants: HashMap<String, IrType> = enm
+        //     .variants
+        //     .into_iter()
+        //     .map(|(var_name, var_type)| (var_name, ast[var_type].to_ir_lazy(self)))
+        //     .collect();
+        let id = self.get_enum_or_insert(&enm.name);
 
-        let fields = strct
+        let mut variants: Vec<IrType> = vec![];
+
+        for (i, (var_name, var_type)) in enm.variants.iter().enumerate() {
+            let typ = ast[*var_type].to_ir(self);
+            variants.push(typ);
+            self.variants.insert((id, var_name.clone()), VariantId(i));
+        }
+
+        let mut size = 0;
+
+        for typ in variants.iter() {
+            size = size.max(typ.size_in_module(&self.module));
+        }
+        size += 1;
+
+        let enum_ref = &mut self.module.enums[id.0];
+        enum_ref.variants = variants;
+        enum_ref.size = size;
+
+        id
+    }
+
+    pub fn build_struct(&mut self, ast: &Ast, strct: Struct) {
+        let id = self.get_struct_or_insert(&strct.name);
+
+        let fields: Vec<IrType> = strct
             .fields
             .into_iter()
             .map(|field| ast[field.typ].to_ir(self))
             .collect();
 
-        let ir_struct = IrStruct {
-            name: strct.name.clone(),
-            fields,
-        };
+        let mut size = 0;
 
-        let id = IrStructId(self.module.structs.len());
-        self.module.structs.push(ir_struct);
-        self.struct_ids.insert(strct.name, id);
+        for typ in fields.iter() {
+            size += typ.size_in_module(&self.module);
+        }
+
+        let struct_ref = &mut self.module.structs[id.0];
+        struct_ref.fields = fields;
+        struct_ref.size = size;
     }
 
     pub fn get_struct(&self, name: &str) -> Option<IrStructId> {
         self.struct_ids.get(name).cloned()
+    }
+
+    pub fn get_struct_or_insert(&mut self, name: &str) -> IrStructId {
+        if let Some(id) = self.struct_ids.get(name).cloned() {
+            return id;
+        }
+
+        let id = IrStructId(self.module.structs.len());
+        self.module.structs.push(IrStruct {
+            name: name.to_string(),
+            fields: Vec::new(),
+            size: 0,
+        });
+        self.struct_ids.insert(name.to_string(), id);
+        id
+    }
+
+    pub fn get_enum_or_insert(&mut self, name: &str) -> IrEnumId {
+        if let Some(id) = self.enum_ids.get(name).cloned() {
+            return id;
+        }
+
+        let id = IrEnumId(self.module.enums.len());
+        self.module.enums.push(IrEnum {
+            name: name.to_string(),
+            variants: Vec::new(),
+            size: 0,
+        });
+        self.enum_ids.insert(name.to_string(), id);
+        id
+    }
+
+    pub fn get_enum(&self, name: &str) -> Option<IrEnumId> {
+        self.enum_ids.get(name).cloned()
+    }
+
+    pub fn get_variant(&self, enum_id: IrEnumId, name: &str) -> Option<VariantId> {
+        self.variants.get(&(enum_id, name.to_string())).cloned()
     }
 
     pub fn current_block(&self) -> BlockId {
@@ -95,6 +170,24 @@ impl Builder {
         let instruction = Instruction::Create {
             struct_id,
             args,
+            result: res.clone(),
+        };
+        self.add_instruction(instruction);
+        res
+    }
+
+    pub fn build_enum_variant(
+        &mut self,
+        enum_id: IrEnumId,
+        variant_id: VariantId,
+        arg: Value,
+        res: Option<Value>,
+    ) -> Value {
+        let res = res.unwrap_or_else(|| self.value_counter.next());
+        let instruction = Instruction::Variant {
+            enum_id,
+            variant: variant_id,
+            value: arg,
             result: res.clone(),
         };
         self.add_instruction(instruction);

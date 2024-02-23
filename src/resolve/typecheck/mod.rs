@@ -61,15 +61,7 @@ pub fn type_derive_expr(
             let Some(AstType::Function(args_types, ret_type)) =
                 context.functions.get(&fun).cloned()
             else {
-                let Some(TypeDef::Struct(strct)) = ast.type_defs.get(&fun).cloned() else {
-                    return error(ErrorKind::NoSuchFunctionOrStruct(fun));
-                };
-                for (arg, field) in args.zip(strct.fields.iter()) {
-                    let typ = ast[field.typ].clone();
-                    type_check_expr(arg, ast, &typ, context, errors)?;
-                }
-
-                return Ok(AstType::Struct(strct.name.clone()));
+                return error(ErrorKind::NoSuchFunction(fun));
             };
             for (arg, arg_type) in args.zip(args_types) {
                 let typ = ast[arg_type].clone();
@@ -132,7 +124,9 @@ pub fn type_derive_expr(
         ExprKind::FieldAccess(expr, field) => {
             let typ = type_derive_expr(expr, ast, context, errors)?;
             if let AstType::Struct(name) = typ {
-                let TypeDef::Struct(strct) = ast.type_defs.get(&name).unwrap();
+                let TypeDef::Struct(strct) = ast.type_defs.get(&name).unwrap() else {
+                    unreachable!();
+                };
                 let Some(field) = strct.fields.iter().find(|f| f.name == field) else {
                     return error(ErrorKind::NoSuchField(field));
                 };
@@ -140,6 +134,26 @@ pub fn type_derive_expr(
             } else {
                 return error(ErrorKind::UnexpectedType(format!("{:?}", typ)));
             }
+        }
+        ExprKind::StructConstructor(name, args) => {
+            let Some(TypeDef::Struct(strct)) = ast.type_defs.get(&name).cloned() else {
+                unreachable!()
+            };
+            for (arg, field) in args.zip(strct.fields.iter()) {
+                let typ = ast[field.typ].clone();
+                type_check_expr(arg, ast, &typ, context, errors)?;
+            }
+
+            AstType::Struct(strct.name.clone())
+        }
+        ExprKind::EnumConstructor(variant_name, enum_name, expr) => {
+            let Some(TypeDef::Enum(enm)) = ast.type_defs.get(&enum_name).cloned() else {
+                unreachable!()
+            };
+            let variant = enm.variants.get(&variant_name).unwrap();
+            let typ = ast[*variant].clone();
+            type_check_expr(expr, ast, &typ, context, errors)?;
+            AstType::Enum(enm.name.clone())
         }
     };
 
@@ -265,22 +279,7 @@ pub fn type_check_expr(
             let Some(AstType::Function(args_types, ret_type)) =
                 context.functions.get(fun_name).cloned()
             else {
-                let Some(TypeDef::Struct(strct)) = ast.type_defs.get(fun_name).cloned() else {
-                    return error(ErrorKind::NoSuchFunctionOrStruct(fun_name.to_owned()));
-                };
-                for (arg, field) in args.zip(strct.fields.iter()) {
-                    let typ = ast[field.typ].clone();
-                    type_check_expr(arg, ast, &typ, context, errors)?;
-                }
-
-                return if ast.t_eq(&suggestion, &AstType::Struct(strct.name.clone())) {
-                    Ok(())
-                } else {
-                    error(ErrorKind::MismatchedTypes {
-                        expected: AstType::Struct(strct.name.clone()),
-                        got: suggestion.clone(),
-                    })
-                };
+                return error(ErrorKind::NoSuchFunctionOrStruct(fun_name.to_owned()));
             };
             for (arg, arg_typ) in args.zip(args_types) {
                 let typ = ast[arg_typ].clone();
@@ -378,6 +377,41 @@ pub fn type_check_expr(
         }
         ExprKind::Let(_, _, _) => todo!(),
         ExprKind::FieldAccess(_, _) => todo!(),
+        ExprKind::StructConstructor(name, args) => {
+            let Some(TypeDef::Struct(strct)) = ast.type_defs.get(name).cloned() else {
+                unreachable!()
+            };
+            for (arg, field) in args.zip(strct.fields.iter()) {
+                let typ = ast[field.typ].clone();
+                type_check_expr(arg, ast, &typ, context, errors)?;
+            }
+
+            if ast.t_eq(suggestion, &AstType::Struct(strct.name.clone())) {
+                Ok(())
+            } else {
+                error(ErrorKind::MismatchedTypes {
+                    expected: AstType::Unit,
+                    got: suggestion.clone(),
+                })
+            }
+        }
+        ExprKind::EnumConstructor(variant_name, enum_name, expr) => {
+            let Some(TypeDef::Enum(enm)) = ast.type_defs.get(enum_name).cloned() else {
+                unreachable!()
+            };
+            let variant = enm.variants.get(variant_name).unwrap();
+            let typ = ast[*variant].clone();
+            type_check_expr(*expr, ast, &typ, context, errors)?;
+
+            if ast.t_eq(suggestion, &AstType::Enum(enm.name.clone())) {
+                Ok(())
+            } else {
+                error(ErrorKind::MismatchedTypes {
+                    expected: AstType::Unit,
+                    got: suggestion.clone(),
+                })
+            }
+        }
     }
 }
 

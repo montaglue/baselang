@@ -20,6 +20,7 @@ pub struct LLVMBackend<'ctx> {
     pub builder: inkwell::builder::Builder<'ctx>,
     pub block_map: HashMap<(IrFunctionId, BlockId), BasicBlock<'ctx>>,
     pub structs: Vec<StructType<'ctx>>,
+    pub enums: Vec<StructType<'ctx>>,
 }
 
 impl<'ctx> LLVMBackend<'ctx> {
@@ -30,6 +31,7 @@ impl<'ctx> LLVMBackend<'ctx> {
             builder: context.create_builder(),
             block_map: HashMap::new(),
             structs: Vec::new(),
+            enums: Vec::new(),
         }
     }
 }
@@ -150,6 +152,9 @@ fn normalize<'ctx>(
             .const_int(*b as u64, false)
             .into(),
         Value::Constant(Constant::Float(f)) => backend.context.f64_type().const_float(*f).into(),
+        Value::Constant(Constant::Byte(b)) => {
+            backend.context.i8_type().const_int(*b as u64, false).into()
+        }
         Value::Constant(Constant::String(s)) => {
             let llvm_i8 = backend.context.i8_type();
             let llvm_i8_ptr = llvm_i8.ptr_type(Default::default());
@@ -511,6 +516,58 @@ fn build_function<'ctx>(
 
                     variables.insert(result.to_string().unwrap(), value);
                 }
+                ir::Instruction::Cast {
+                    cast_to_type,
+                    value,
+                    result,
+                } => {
+                    let value = normalize(value, &variables, backend)?;
+                    let ty = cast_to_type.to_llvm(backend);
+                    let result_llvm = backend
+                        .builder
+                        .build_bitcast(value, ty, "")
+                        .map_err(CompilerError::from_llvm_builder)?;
+                    variables.insert(result.to_string().unwrap(), result_llvm);
+                }
+                ir::Instruction::Switch {
+                    value,
+                    branches,
+                    else_branch,
+                } => {
+                    let val = normalize(value, &variables, backend)?.into_int_value();
+                    let else_block = backend.block_map[&(fun_id, *else_branch)];
+
+                    let int_type = backend.context.i64_type();
+
+                    let cases: Vec<_> = branches
+                        .iter()
+                        .enumerate()
+                        .map(|(i, block_id)| {
+                            (
+                                int_type.const_int(i as _, false),
+                                backend.block_map[&(fun_id, *block_id)],
+                            )
+                        })
+                        .collect();
+
+                    backend
+                        .builder
+                        .build_switch(val, else_block, &cases)
+                        .map_err(CompilerError::from_llvm_builder)?;
+                }
+                ir::Instruction::Variant {
+                    enum_id: _,
+                    variant: _,
+                    value: _,
+                    result: _,
+                } => unreachable!(),
+
+                ir::Instruction::Match {
+                    enum_id: _,
+                    value: _,
+                    branches: _,
+                    else_branch: _,
+                } => unreachable!(),
             }
         }
     }
@@ -528,6 +585,22 @@ pub fn build_struct(struct_id: IrStructId, ir: &ir::Module, backend: &mut LLVMBa
 
     let struct_type = backend.context.struct_type(&fields, false);
     backend.structs.push(struct_type);
+}
+
+pub fn build_enum(enum_id: ir::IrEnumId, ir: &ir::Module, backend: &mut LLVMBackend) {
+    let ir_enum = &ir.enums[enum_id.0];
+
+    let mut val = 0;
+    for variant_type in &ir_enum.variants {
+        val = val.max(variant_type.size_in_module(ir));
+    }
+
+    let i8_type = backend.context.i8_type().as_basic_type_enum();
+
+    let fields = [i8_type, i8_type.array_type(val as _).as_basic_type_enum()];
+
+    let struct_type = backend.context.struct_type(&fields, false);
+    backend.enums.push(struct_type);
 }
 
 pub fn build<'ctx>(

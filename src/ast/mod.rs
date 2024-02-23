@@ -77,6 +77,10 @@ impl Ast {
             .insert(strct.name.clone(), TypeDef::Struct(strct));
     }
 
+    pub fn add_enum(&mut self, enm: Enum) {
+        self.type_defs.insert(enm.name.clone(), TypeDef::Enum(enm));
+    }
+
     pub fn t_eq(&self, lhs: &AstType, rhs: &AstType) -> bool {
         match (lhs, rhs) {
             (AstType::Hole(_), _) => true,
@@ -119,6 +123,12 @@ impl Index<ExprId> for Ast {
     }
 }
 
+impl IndexMut<ExprId> for Ast {
+    fn index_mut(&mut self, index: ExprId) -> &mut Self::Output {
+        &mut self.exprs[index.0]
+    }
+}
+
 impl Index<AstFunctionId> for Ast {
     type Output = AstFunction;
 
@@ -141,7 +151,7 @@ impl IndexMut<AstTypeId> for Ast {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AstFunctionId(pub usize);
 
 #[derive(Debug, Clone, PartialEq)]
@@ -214,13 +224,15 @@ pub enum ExprKind {
     Ref(ExprId),
     Deref(ExprId),
     FieldAccess(ExprId, String),
+    StructConstructor(String, Exprs),
+    EnumConstructor(String, String, ExprId),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ExprId(usize);
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Exprs(ExprId, usize);
+pub struct Exprs(pub ExprId, usize);
 
 impl Exprs {
     pub fn range(&self) -> std::ops::Range<usize> {
@@ -276,6 +288,7 @@ pub enum AstType {
     Pointer(AstTypeId),
     Function(AstTypes, AstTypeId),
     Struct(String),
+    Enum(String),
     Hole(usize),
 }
 
@@ -293,11 +306,13 @@ impl AstType {
             AstType::Hole(_) => "_".to_string(),
             AstType::Pointer(_) => unreachable!(),
             AstType::Struct(_) => todo!(),
+            AstType::Enum(_) => todo!(),
             AstType::Char => "char".to_string(),
         }
     }
 
     pub fn to_ir(&self, builder: &Builder) -> IrType {
+        println!("to_ir {:?}", self);
         match self {
             AstType::Unit => IrType::Unit,
             AstType::Never => IrType::Never,
@@ -309,6 +324,15 @@ impl AstType {
             AstType::Hole(_) => unreachable!(),
             AstType::Pointer(_) => IrType::Pointer,
             AstType::Struct(s) => IrType::IrStruct(builder.get_struct(s).unwrap()),
+            AstType::Enum(s) => IrType::IrEnum(builder.get_enum(s).unwrap()),
+        }
+    }
+
+    pub fn to_ir_lazy(&self, builder: &mut Builder) -> IrType {
+        match self {
+            AstType::Struct(s) => IrType::IrStruct(builder.get_struct_or_insert(s)),
+            AstType::Enum(s) => IrType::IrEnum(builder.get_enum_or_insert(s)),
+            _ => self.to_ir(builder),
         }
     }
 }
@@ -319,8 +343,8 @@ impl Countable for AstType {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct VariableId(pub usize);
-pub struct FunctionId(pub usize);
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Field {
@@ -335,6 +359,13 @@ pub struct Struct {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct Enum {
+    pub name: String,
+    pub variants: HashMap<String, AstTypeId>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum TypeDef {
     Struct(Struct),
+    Enum(Enum),
 }

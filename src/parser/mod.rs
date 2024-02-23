@@ -1,10 +1,11 @@
 use std::{
+    collections::HashMap,
     iter::{Map, Peekable},
     str::SplitWhitespace,
 };
 
 use crate::{
-    ast::{Args, Ast, AstFunction, AstType, Expr, ExprKind, Field, Struct},
+    ast::{Args, Ast, AstFunction, AstType, Enum, Expr, ExprKind, Field, Struct},
     parser::tokenizer::TokenType,
     utils::error::{error, CompilerResult, ErrorKind, Errors},
 };
@@ -362,6 +363,35 @@ where
 
         Ok(Struct { name, fields })
     }
+
+    fn parse_enum(&mut self, ast: &mut Ast, errors: &mut Errors) -> CompilerResult<Enum> {
+        let name_token = expect_token(self.tokenizer.next(), Some(TokenType::Ident), errors)?;
+        let name = self.source[name_token.span.range()].to_owned();
+
+        let mut variants = HashMap::new();
+
+        while self
+            .tokenizer
+            .peek()
+            .is_some_and(|token| token.kind != TokenType::CloseParen)
+        {
+            let variant_name_token =
+                expect_token(self.tokenizer.next(), Some(TokenType::Ident), errors)?;
+
+            let variant_name = self.source[variant_name_token.span.range()].to_owned();
+
+            let variant_type = self.parse_type(ast, errors)?;
+            let variant_type = ast.add_type(variant_type);
+
+            variants.insert(variant_name, variant_type);
+        }
+
+        expect_token(self.tokenizer.next(), Some(TokenType::CloseParen), errors)?; // skip )
+
+        let enm = Enum { name, variants };
+
+        Ok(enm)
+    }
 }
 
 impl<'s, T> Parser<'s, T>
@@ -384,6 +414,10 @@ where
                 "struct" => {
                     let strct = self.parse_struct(&mut ast, errors)?;
                     ast.add_struct(strct);
+                }
+                "enum" => {
+                    let enm = self.parse_enum(&mut ast, errors)?;
+                    ast.add_enum(enm);
                 }
                 _ => {
                     return error(ErrorKind::UnexpectedToken(token.to_owned()));

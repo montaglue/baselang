@@ -3,7 +3,7 @@ use std::process::Command;
 use backend::build;
 use utils::error::CompilerResult;
 
-use crate::{ir::irgen::build_ir, parser::Parser, utils::error::Errors};
+use crate::{ir::irgen::generate_ir, parser::Parser, utils::error::Errors};
 
 pub mod ast;
 pub mod backend;
@@ -24,7 +24,7 @@ fn process_error<T>(error: impl Into<CompilerResult<T>>, prompt: &str) -> T {
 }
 
 fn main() {
-    let program = include_str!("../examples/structure.base");
+    let program = include_str!("../examples/enum.base");
 
     let mut errors = Errors::new();
 
@@ -38,7 +38,7 @@ fn main() {
         "Error during resolving",
     );
 
-    let ir = process_error(build_ir(&ast, &mut errors), "Error during IR generation");
+    let ir = process_error(generate_ir(&ast, &mut errors), "Error during IR generation");
     // println!("{:#?}", ir);
 
     let context = inkwell::context::Context::create();

@@ -1,4 +1,7 @@
-use std::ops::{Index, IndexMut};
+use std::{
+    collections::HashMap,
+    ops::{Index, IndexMut},
+};
 
 use inkwell::{
     types::{BasicType, BasicTypeEnum},
@@ -13,6 +16,8 @@ use crate::{
     },
 };
 
+use self::builder::Builder;
+
 pub mod builder;
 pub mod irgen;
 
@@ -20,11 +25,20 @@ pub mod irgen;
 pub struct IrStruct {
     pub name: String,
     pub fields: Vec<IrType>,
+    pub size: i64,
+}
+
+#[derive(Clone, Debug)]
+pub struct IrEnum {
+    pub name: String,
+    pub variants: Vec<IrType>,
+    pub size: i64,
 }
 
 #[derive(Clone, Debug)]
 pub struct Module {
     pub structs: Vec<IrStruct>,
+    pub enums: Vec<IrEnum>,
     pub functions: Vec<IrFunction>,
 }
 
@@ -74,6 +88,7 @@ pub enum Constant {
     Int(i64),
     Float(f64),
     Bool(bool),
+    Byte(u8),
     String(String),
 }
 
@@ -138,6 +153,28 @@ pub enum Instruction {
         value: Value,
         result: Value,
     },
+    Variant {
+        enum_id: IrEnumId,
+        variant: VariantId,
+        value: Value,
+        result: Value,
+    },
+    Cast {
+        cast_to_type: IrType,
+        value: Value,
+        result: Value,
+    },
+    Match {
+        enum_id: IrEnumId,
+        value: Value,
+        branches: HashMap<VariantId, BlockId>,
+        else_branch: Option<BlockId>,
+    },
+    Switch {
+        value: Value,
+        branches: Vec<BlockId>,
+        else_branch: BlockId,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -197,6 +234,12 @@ impl IndexMut<BlockId> for IrFunction {
 pub struct IrStructId(pub usize);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct IrEnumId(pub usize);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct VariantId(pub usize);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum IrType {
     Int,
     Float,
@@ -204,6 +247,9 @@ pub enum IrType {
     Pointer,
     Byte,
     IrStruct(IrStructId),
+    IrEnum(IrEnumId),
+    IrArray(usize),
+    IrVector,
     Unit,
     Never,
 }
@@ -219,6 +265,17 @@ impl IrType {
             IrType::Pointer => "pointer".to_string(),
             IrType::IrStruct(_) => todo!(),
             IrType::Byte => "byte".to_string(),
+            IrType::IrEnum(_) => todo!(),
+            IrType::IrArray(_) => todo!(),
+            IrType::IrVector => todo!(),
+        }
+    }
+
+    pub fn size_in_module(&self, module: &Module) -> i64 {
+        match self {
+            IrType::IrStruct(id) => module.structs[id.0].size,
+            IrType::IrEnum(id) => module.enums[id.0].size,
+            rest => rest.size(),
         }
     }
 
@@ -229,9 +286,8 @@ impl IrType {
             IrType::Bool => 1,
             IrType::Pointer => 8,
             IrType::Unit => 0,
-            IrType::Never => unreachable!(),
-            IrType::IrStruct(_) => todo!(),
             IrType::Byte => 1,
+            _ => unreachable!(),
         }
     }
 
@@ -250,6 +306,13 @@ impl IrType {
             IrType::Unit => unreachable!(),
             IrType::Never => unreachable!(),
             IrType::Byte => backend.context.i8_type().as_basic_type_enum(),
+            IrType::IrEnum(enum_id) => backend.enums[enum_id.0].as_basic_type_enum(),
+            IrType::IrArray(size) => backend
+                .context
+                .i8_type()
+                .array_type(*size as _)
+                .as_basic_type_enum(),
+            IrType::IrVector => todo!(),
         }
     }
 }
